@@ -27,6 +27,13 @@ MainWindow::MainWindow(QWidget *parent)
     m_tabWidget->setMovable(true);
     setCentralWidget(m_tabWidget);
 
+    connect(
+        m_tabWidget,
+        &QTabWidget::tabCloseRequested,
+        this,
+        &MainWindow::onTabCloseRequested
+        );
+
     QToolButton *newTabButton = new QToolButton(this);
     newTabButton->setText("+");
 
@@ -41,6 +48,25 @@ MainWindow::MainWindow(QWidget *parent)
         );
 
     m_tabWidget->setCornerWidget(newTabButton);
+
+    connect(
+        m_tabWidget,
+        &QTabWidget::currentChanged,
+        this,
+        [this](int)
+        {
+            QWebEngineView *view = currentWebView();
+
+            if (!view)
+                return;
+
+            m_addressBar->setText(view->url().toString());
+
+            setWindowTitle(view->title());
+
+            statusBar()->showMessage("Ready");
+        }
+        );
 
     // Wire address bar
     connect(m_addressBar, &QLineEdit::returnPressed,
@@ -111,7 +137,7 @@ void MainWindow::onTabCloseRequested(int index)
 
 void MainWindow::onAddressEntered()
 {
-    QWebEngineView *webView = qobject_cast<QWebEngineView*>(m_tabWidget->currentWidget());
+    QWebEngineView *webView = currentWebView();
     if (webView)
         webView->setUrl(QUrl::fromUserInput(m_addressBar->text()));
 }
@@ -135,19 +161,26 @@ void MainWindow::setupToolBar()
 
     // Wire Back/Forward/Reload to active tab
     connect(m_backAction, &QAction::triggered, this, [this]() {
-        QWebEngineView *v = qobject_cast<QWebEngineView*>(m_tabWidget->currentWidget());
+        QWebEngineView *v = currentWebView();
         if (v) v->back();
     });
 
     connect(m_forwardAction, &QAction::triggered, this, [this]() {
-        QWebEngineView *v = qobject_cast<QWebEngineView*>(m_tabWidget->currentWidget());
+        QWebEngineView *v = currentWebView();
         if (v) v->forward();
     });
 
     connect(m_reloadAction, &QAction::triggered, this, [this]() {
-        QWebEngineView *v = qobject_cast<QWebEngineView*>(m_tabWidget->currentWidget());
+        QWebEngineView *v = currentWebView();
         if (v) v->reload();
     });
+}
+
+QWebEngineView* MainWindow::currentWebView()
+{
+    return qobject_cast<QWebEngineView*>(
+        m_tabWidget->currentWidget()
+        );
 }
 
 void MainWindow::setupMenuBar()

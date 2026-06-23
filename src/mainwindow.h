@@ -25,6 +25,9 @@ private slots:
     void onTabCloseRequested(int index);
 
 private:
+    QWebEngineView* currentWebView();
+
+private:
     void setupToolBar();
     void setupMenuBar();
     void setupStatusBar();
