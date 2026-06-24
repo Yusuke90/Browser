@@ -12,6 +12,11 @@
 #include <QShortcut>
 #include <QKeySequence>
 #include <QToolButton>
+#include "custombrowserpage.h"
+#include <QWebEngineProfile>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QPushButton>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -79,6 +84,17 @@ MainWindow::MainWindow(QWidget *parent)
 void MainWindow::addNewTab(const QUrl &url)
 {
     QWebEngineView *webView = new QWebEngineView(this);
+
+    // Use our custom page instead of the default one
+    CustomBrowserPage *page = new CustomBrowserPage(QWebEngineProfile::defaultProfile(), webView);
+    webView->setPage(page);
+
+    // When a popup is blocked, show a message in the status bar
+    connect(page, &CustomBrowserPage::popupBlocked,
+            this, [this](const QUrl &url) {
+                statusBar()->showMessage(tr("Popup blocked: %1").arg(url.toString()), 5000);
+            });
+
     webView->setUrl(url);
 
     int index = m_tabWidget->addTab(webView, tr("New Tab"));
@@ -122,6 +138,9 @@ void MainWindow::addNewTab(const QUrl &url)
                 if (m_tabWidget->currentWidget() == webView)
                     statusBar()->showMessage(tr("Ready"));
             });
+
+    connect(page, &CustomBrowserPage::popupBlocked,
+            this, &MainWindow::onPopupBlocked);
 }
 
 void MainWindow::onTabCloseRequested(int index)
@@ -238,4 +257,54 @@ void MainWindow::setupStatusBar()
     m_progressLabel = new QLabel(tr("0%"), this);
     m_progressLabel->setFixedWidth(32);
     statusBar()->addPermanentWidget(m_progressLabel);
+}
+void MainWindow::onPopupBlocked(const QUrl &url)
+{
+    if (m_notificationBar) {
+        m_notificationBar->deleteLater();
+        m_notificationBar = nullptr;
+    }
+
+    m_notificationBar = new QWidget(this);
+    m_notificationBar->setStyleSheet(
+        "background-color: #2b2b2b;"
+        "border-bottom: 1px solid #555;"
+        "color: white;"
+        );
+    m_notificationBar->setFixedHeight(36);
+
+    QHBoxLayout *layout = new QHBoxLayout(m_notificationBar);
+    layout->setContentsMargins(8, 4, 8, 4);
+
+    QLabel *label = new QLabel(tr("Popup blocked"), m_notificationBar);
+    QPushButton *openBtn = new QPushButton(tr("Open anyway"), m_notificationBar);
+    QPushButton *dismissBtn = new QPushButton(tr("Dismiss"), m_notificationBar);
+
+    layout->addWidget(label);
+    layout->addStretch();
+    layout->addWidget(openBtn);
+    layout->addWidget(dismissBtn);
+    openBtn->setStyleSheet("background-color: #0078d4; color: white; border-radius: 4px; padding: 4px 10px;");
+    dismissBtn->setStyleSheet("background-color: #555; color: white; border-radius: 4px; padding: 4px 10px;");
+    connect(openBtn, &QPushButton::clicked, this, [this, url]() {
+        addNewTab(url);
+        if (m_notificationBar) {
+            m_notificationBar->deleteLater();
+            m_notificationBar = nullptr;
+        }
+    });
+
+    connect(dismissBtn, &QPushButton::clicked, this, [this]() {
+        if (m_notificationBar) {
+            m_notificationBar->deleteLater();
+            m_notificationBar = nullptr;
+        }
+    });
+
+    // Position bar just below the toolbar
+    int toolbarBottom = m_toolBar->y() + m_toolBar->height();
+    m_notificationBar->setParent(this);
+    m_notificationBar->setGeometry(0, toolbarBottom, this->width(), 36);
+    m_notificationBar->show();
+    m_notificationBar->raise();
 }

@@ -21,6 +21,8 @@ qt_add_executable(QtBrowser
     src/main.cpp
     src/mainwindow.h
     src/mainwindow.cpp
+    src/custombrowserpage.h
+    src/custombrowserpage.cpp
 )
 
 target_link_libraries(QtBrowser PRIVATE

@@ -8,6 +8,8 @@
 #include <QLabel>
 #include <QTabWidget>
 #include <QWebEngineView>
+#include <QLabel>
+#include <QPushButton>
 
 class MainWindow : public QMainWindow
 {
@@ -23,7 +25,7 @@ public slots:
 private slots:
     void onAddressEntered();
     void onTabCloseRequested(int index);
-
+    void onPopupBlocked(const QUrl &url);
 private:
     QWebEngineView* currentWebView();
 
@@ -41,4 +43,5 @@ private:
     QAction        *m_homeAction    = nullptr;
     QProgressBar   *m_progressBar   = nullptr;
     QLabel         *m_progressLabel = nullptr;
+    QWidget      *m_notificationBar = nullptr;
 };
