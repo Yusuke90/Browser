@@ -26,6 +26,8 @@ qt_add_executable(QtBrowser
     src/downloadmanager.h
     src/downloadmanager.cpp
     resources.qrc
+    src/apitesterwidget.h
+    src/apitesterwidget.cpp
 )
 
 target_link_libraries(QtBrowser PRIVATE

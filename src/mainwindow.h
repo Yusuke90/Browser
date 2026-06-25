@@ -42,6 +42,7 @@ private:
     void setupNavBar(QWidget *parent);
     void setupStatusBar();
     void buildHamburgerMenu(QMenu *menu);
+    void addApiTesterTab();
 
     // Tab strip
     QTabBar         *m_tabBar           = nullptr;
@@ -63,4 +64,6 @@ private:
     QWidget         *m_notificationBar  = nullptr;
 
     DownloadManager *m_downloadManager  = nullptr;
+
+    QLabel *m_networkStatusLabel = nullptr;
 };
