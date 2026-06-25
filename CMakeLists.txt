@@ -25,7 +25,7 @@ qt_add_executable(QtBrowser
     src/custombrowserpage.cpp
     src/downloadmanager.h
     src/downloadmanager.cpp
-
+    resources.qrc
 )
 
 target_link_libraries(QtBrowser PRIVATE

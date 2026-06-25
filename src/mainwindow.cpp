@@ -1,485 +1,586 @@
 #include "mainwindow.h"
+#include "custombrowserpage.h"
+
 #include <QWebEngineView>
+#include <QWebEngineProfile>
+#include <QWebEnginePermission>
+#include <QWebEngineCertificateError>
+
 #include <QAction>
+#include <QApplication>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QProgressBar>
-#include <QStyle>
-#include <QToolBar>
-#include <QStatusBar>
 #include <QShortcut>
 #include <QKeySequence>
+#include <QStackedWidget>
+#include <QStatusBar>
+#include <QStyle>
+#include <QTabBar>
 #include <QToolButton>
-#include "custombrowserpage.h"
-#include <QWebEngineProfile>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
 #include <QPushButton>
-#include <QMessageBox>
-#include <QWebEnginePermission>
-#include <QWebEngineCertificateError>
-#include <QWebEngineProfile>
+#include <QSizePolicy>
+#include <QFont>
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Chrome dark-mode palette (exact values from chrome://settings)
+// ─────────────────────────────────────────────────────────────────────────────
+static const char *kFrame       = "#202124";   // window frame / tab bar bg
+static const char *kToolbar     = "#35363a";   // toolbar + active tab bg
+static const char *kSurface     = "#292a2d";   // inactive tab hover
+static const char *kOmnibox     = "#202124";   // address bar bg (darker than toolbar)
+static const char *kBorder      = "#3c4043";   // subtle dividers
+static const char *kText        = "#e8eaed";   // primary text
+static const char *kTextDim     = "#9aa0a6";   // secondary / icon text
+static const char *kAccent      = "#8ab4f8";   // focus ring / link blue
+static const char *kHover       = "#3c4043";   // button hover
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Font — Chrome uses Segoe UI on Windows, Roboto on Linux
+// ─────────────────────────────────────────────────────────────────────────────
+static const char *kFontFamily  = "Segoe UI, Roboto, Arial, sans-serif";
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Constructor
+// ─────────────────────────────────────────────────────────────────────────────
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle(tr("Qt Browser"));
-        setupToolBar();
-    setupMenuBar();
-    setupStatusBar();
+    menuBar()->hide();
 
-    // Module 4 — Tab widget replaces single web view
-    m_tabWidget = new QTabWidget(this);
-
-    // ---------- Styling ----------
-
-    m_tabWidget->setStyleSheet(
-        "QTabWidget::pane { border: none; }"
-
-        "QTabBar::tab {"
-        "background:#16213e;"
-        "color:#aaa;"
-        "padding:6px 16px;"
-        "border-top-left-radius:6px;"
-        "border-top-right-radius:6px;"
-        "margin-right:2px;"
-        "}"
-
-        "QTabBar::tab:selected {"
-        "background:#0f3460;"
-        "color:white;"
-        "}"
-
-        "QTabBar::tab:hover {"
-        "background:#0f3460;"
-        "}"
-        );
-
-    statusBar()->setStyleSheet(
-        "QStatusBar {"
-        "background:#1a1a2e;"
-        "color:#aaa;"
-        "border-top:1px solid #0f3460;"
-        "}"
-        );
+    // Global font
+    QFont appFont(kFontFamily, 10);
+    appFont.setWeight(QFont::Normal);
+    QApplication::setFont(appFont);
 
     setStyleSheet(
-        "QMainWindow {"
-        "background:#1a1a2e;"
-        "}"
-        );
+        QString("QMainWindow { background: %1; }").arg(kFrame)
+    );
 
-    // ---------- End Styling ----------
+    // Central layout: tab strip → nav bar → web content
+    QWidget     *central = new QWidget(this);
+    QVBoxLayout *vl      = new QVBoxLayout(central);
+    vl->setSpacing(0);
+    vl->setContentsMargins(0, 0, 0, 0);
 
-    m_tabWidget->setTabsClosable(true);
-    m_tabWidget->setMovable(true);
+    // Row 1 — Tab strip
+    QWidget *tabStrip = new QWidget(central);
+    setupTabStrip(tabStrip);
+    vl->addWidget(tabStrip);
 
-    setCentralWidget(m_tabWidget);
+    // Row 2 — Navigation bar
+    m_navWidget = new QWidget(central);
+    setupNavBar(m_navWidget);
+    vl->addWidget(m_navWidget);
 
-    connect(
-        m_tabWidget,
-        &QTabWidget::tabCloseRequested,
-        this,
-        &MainWindow::onTabCloseRequested
-        );
+    // Row 3 — Web content stack
+    m_webStack = new QStackedWidget(central);
+    vl->addWidget(m_webStack);
 
-    QToolButton *newTabButton =
-        new QToolButton(this);
+    setCentralWidget(central);
 
-    newTabButton->setText("+");
+    // Status bar
+    setupStatusBar();
 
-    connect(
-        newTabButton,
-        &QToolButton::clicked,
-        this,
-        [this]()
-        {
-            addNewTab();
-        }
-        );
+    // Keyboard shortcuts
+    auto *scNewTab = new QShortcut(QKeySequence("Ctrl+T"),       this);
+    auto *scClose  = new QShortcut(QKeySequence("Ctrl+W"),       this);
+    auto *scIncog  = new QShortcut(QKeySequence("Ctrl+Shift+N"), this);
+    auto *scQuit   = new QShortcut(QKeySequence("Ctrl+Q"),       this);
+    auto *scReload = new QShortcut(QKeySequence("F5"),           this);
 
-    m_tabWidget->setCornerWidget(
-        newTabButton
-        );
+    connect(scNewTab, &QShortcut::activated, this, [this]() { addNewTab(); });
+    connect(scClose,  &QShortcut::activated, this, [this]() {
+        onTabCloseRequested(m_tabBar->currentIndex());
+    });
+    connect(scIncog,  &QShortcut::activated, this, [this]() { addNewIncognitoTab(); });
+    connect(scQuit,   &QShortcut::activated, this, &QWidget::close);
+    connect(scReload, &QShortcut::activated, this, [this]() {
+        if (auto *v = currentWebView()) v->reload();
+    });
 
-    connect(
-        m_tabWidget,
-        &QTabWidget::currentChanged,
-        this,
-        [this](int)
-        {
-            QWebEngineView *view =
-                currentWebView();
-
-            if (!view)
-                return;
-
-            m_addressBar->setText(
-                view->url().toString()
-                );
-
-            setWindowTitle(
-                view->title()
-                );
-
-            statusBar()->showMessage(
-                "Ready"
-                );
-        }
-        );
-
-    // Wire address bar
-    connect(
-        m_addressBar,
-        &QLineEdit::returnPressed,
-        this,
-        &MainWindow::onAddressEntered
-        );
-
-    // Open first tab
-    addNewTab(
-        QUrl(
-            "https://www.google.com"
-            )
-        );
+    // Address bar
+    connect(m_addressBar, &QLineEdit::returnPressed,
+            this, &MainWindow::onAddressEntered);
 
     // Download manager
-    m_downloadManager =
-        new DownloadManager(
-            this
-            );
+    m_downloadManager = new DownloadManager(this);
+    connect(QWebEngineProfile::defaultProfile(),
+            &QWebEngineProfile::downloadRequested,
+            this, [this](QWebEngineDownloadRequest *dl) {
+                m_downloadManager->addDownload(dl);
+            });
 
-    connect(
-        QWebEngineProfile::defaultProfile(),
-        &QWebEngineProfile::downloadRequested,
-        this,
-        [this]
-        (
-            QWebEngineDownloadRequest
-            *download
-            )
-        {
-            m_downloadManager
-                ->addDownload(
-                    download
-                    );
-        }
-        );
+    // First tab
+    addNewTab(QUrl("https://www.google.com"));
 }
 
-
-void MainWindow::createTab(QWebEngineProfile *profile,
-                           const QUrl &url,
-                           const QString &prefix){
-    QWebEngineView *webView = new QWebEngineView(this);
-
-    CustomBrowserPage *page =
-        new CustomBrowserPage(profile, webView);
-
-    connect(
-        page,
-        &QWebEnginePage::certificateError,
-        this,
-        [this](QWebEngineCertificateError error)
-        {
-            auto reply = QMessageBox::warning(
-                this,
-                "HTTPS Certificate Warning",
-                QString(
-                    "The certificate for\n\n%1\n\nis invalid.\n\nContinue anyway?"
-                    ).arg(error.url().toString()),
-                QMessageBox::Yes | QMessageBox::No
-                );
-
-            if (reply == QMessageBox::Yes)
-                error.acceptCertificate();
-            else
-                error.rejectCertificate();
-        }
-        );
-
-    connect(
-        page,
-        &QWebEnginePage::permissionRequested,
-        this,
-        [this](QWebEnginePermission permission)
-        {
-            QString permissionName;
-
-            switch (permission.permissionType())
-            {
-            case QWebEnginePermission::PermissionType::Geolocation:
-                permissionName = "Location";
-                break;
-
-            case QWebEnginePermission::PermissionType::MediaAudioCapture:
-                permissionName = "Microphone";
-                break;
-
-            case QWebEnginePermission::PermissionType::MediaVideoCapture:
-                permissionName = "Camera";
-                break;
-
-            case QWebEnginePermission::PermissionType::Notifications:
-                permissionName = "Notifications";
-                break;
-
-            default:
-                permissionName = "Permission";
-                break;
-            }
-
-            auto reply = QMessageBox::question(
-                this,
-                "Permission Request",
-                QString("%1 wants access to your %2.\nAllow?")
-                    .arg(permission.origin().host())
-                    .arg(permissionName)
-                );
-
-            if (reply == QMessageBox::Yes)
-                permission.grant();
-            else
-                permission.deny();
-        }
-        );
-    webView->setPage(page);
-
-    int index = m_tabWidget->addTab(webView, prefix +tr("New Tab"));
-    m_tabWidget->setCurrentIndex(index);
-    // Update tab title when page title changes
-    connect(webView, &QWebEngineView::titleChanged,
-            this, [this, webView,prefix](const QString &title) {
-                int i = m_tabWidget->indexOf(webView);
-                if (i >= 0)
-                    m_tabWidget->setTabText(i, prefix + (title.isEmpty() ? tr("New Tab") : title));
-                if (m_tabWidget->currentWidget() == webView)
-                    setWindowTitle(title);
-            });
-
-    // Update address bar when URL changes
-    connect(webView, &QWebEngineView::urlChanged,
-            this, [this, webView](const QUrl &newUrl) {
-                if (m_tabWidget->currentWidget() == webView)
-                    m_addressBar->setText(newUrl.toString());
-            });
-
-    //update favicon
-    connect(webView,&QWebEngineView::iconChanged,this,
-            [this,webView](const QIcon &icon){
-                int i=m_tabWidget->indexOf(webView);
-                if(i>=0){
-                    m_tabWidget->setTabIcon(i, icon);
-                }
-            }
-            );
-
-    // Update progress bar
-    connect(webView, &QWebEngineView::loadProgress,
-            this, [this, webView](int progress) {
-                if (m_tabWidget->currentWidget() == webView) {
-                    m_progressBar->setValue(progress);
-                    m_progressLabel->setText(QString::number(progress) + "%");
-                }
-            });
-
-    // Update status bar
-    connect(webView, &QWebEngineView::loadStarted,
-            this, [this, webView]() {
-                if (m_tabWidget->currentWidget() == webView)
-                    statusBar()->showMessage(tr("Loading..."));
-            });
-
-    connect(webView, &QWebEngineView::loadFinished,
-            this, [this, webView](bool) {
-                if (m_tabWidget->currentWidget() == webView)
-                    statusBar()->showMessage(tr("Ready"));
-            });
-
-    connect(page, &CustomBrowserPage::popupBlocked,
-            this, &MainWindow::onPopupBlocked);
-
-    webView->setUrl(url);
-}
-
-void MainWindow::addNewTab(const QUrl &url)
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tab strip — Chrome layout
+//  ╭── Tab 1 ──╮╭── Tab 2 ──╮  +
+//  The active tab is the same colour as the toolbar below, creating a
+//  seamless connection.  Inactive tabs are darker (frame colour).
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::setupTabStrip(QWidget *strip)
 {
-    createTab(
-        QWebEngineProfile::defaultProfile(),
-        url
+    strip->setFixedHeight(34);
+    strip->setObjectName("tabStrip");
+    strip->setStyleSheet(
+        QString(
+            "QWidget#tabStrip { background: %1; }"
+        ).arg(kFrame)
+    );
+
+    QHBoxLayout *hl = new QHBoxLayout(strip);
+    hl->setContentsMargins(8, 4, 4, 0);   // small top padding, no bottom
+    hl->setSpacing(0);
+
+    // ── Tab bar ──────────────────────────────────────────────────────────────
+    m_tabBar = new QTabBar(strip);
+    m_tabBar->setTabsClosable(true);
+    m_tabBar->setMovable(true);
+    m_tabBar->setExpanding(false);
+    m_tabBar->setElideMode(Qt::ElideRight);
+    m_tabBar->setDocumentMode(true);
+
+    // Chrome-style tabs: rounded top, active tab = toolbar colour
+    m_tabBar->setStyleSheet(
+        QString(
+            "QTabBar { background: transparent; border: none; }"
+
+            "QTabBar::tab {"
+            "  background: %1;"            // frame colour = inactive
+            "  color: %2;"
+            "  padding: 5px 12px;"
+            "  min-width: 100px;"
+            "  max-width: 220px;"
+            "  margin-right: 1px;"
+            "  border-top-left-radius: 8px;"
+            "  border-top-right-radius: 8px;"
+            "  font-family: '%3';"
+            "  font-size: 12px;"
+            "}"
+
+            "QTabBar::tab:selected {"
+            "  background: %4;"            // toolbar colour = active
+            "  color: %5;"
+            "}"
+
+            "QTabBar::tab:!selected:hover {"
+            "  background: %6;"            // surface = hover
+            "}"
+
+            "QTabBar::close-button {"
+            "  image: none;"
+            "  border: none;"
+            "  padding: 0px;"
+            "}"
+        ).arg(kFrame, kTextDim, kFontFamily, kToolbar, kText, kSurface)
+    );
+
+    connect(m_tabBar, &QTabBar::tabCloseRequested,
+            this, &MainWindow::onTabCloseRequested);
+    connect(m_tabBar, &QTabBar::currentChanged,
+            this, &MainWindow::onCurrentTabChanged);
+
+    hl->addWidget(m_tabBar);
+
+    // ── "+" new-tab button ──────────────────────────────────────────────────
+    QToolButton *newTabBtn = new QToolButton(strip);
+    newTabBtn->setText("+");
+    newTabBtn->setToolTip(tr("New tab (Ctrl+T)"));
+    newTabBtn->setFixedSize(28, 28);
+    newTabBtn->setStyleSheet(
+        QString(
+            "QToolButton {"
+            "  color: %1;"
+            "  background: transparent;"
+            "  border: none;"
+            "  border-radius: 14px;"
+            "  font-size: 18px;"
+            "  font-weight: 300;"
+            "  font-family: '%2';"
+            "}"
+            "QToolButton:hover { background: %3; }"
+        ).arg(kTextDim, kFontFamily, kSurface)
+    );
+    connect(newTabBtn, &QToolButton::clicked,
+            this, [this]() { addNewTab(); });
+
+    hl->addWidget(newTabBtn);
+    hl->addStretch();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Navigation bar — Chrome layout
+//  [ ← ] [ → ] [ ⟳ ]   [ 🔒  address bar ...                    ]   [ ⋮ ]
+//  Background matches the active tab colour, so they blend together.
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::setupNavBar(QWidget *nav)
+{
+    nav->setFixedHeight(40);
+    nav->setObjectName("navBar");
+    nav->setStyleSheet(
+        QString(
+            "QWidget#navBar {"
+            "  background: %1;"
+            "  border-bottom: 1px solid %2;"
+            "}"
+        ).arg(kToolbar, kBorder)
+    );
+
+    QHBoxLayout *hl = new QHBoxLayout(nav);
+    hl->setContentsMargins(8, 4, 8, 4);
+    hl->setSpacing(0);
+
+    // Chrome-style flat icon buttons
+    auto makeBtn = [&](const QString &symbol,
+                       const QString &tooltip,
+                       int size = 32) -> QToolButton * {
+        QToolButton *btn = new QToolButton(nav);
+        btn->setText(symbol);
+        btn->setToolTip(tooltip);
+        btn->setFixedSize(size, size);
+        btn->setStyleSheet(
+            QString(
+                "QToolButton {"
+                "  color: %1;"
+                "  background: transparent;"
+                "  border: none;"
+                "  border-radius: %2px;"
+                "  font-size: 15px;"
+                "  font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;"
+                "}"
+                "QToolButton:hover    { background: %3; }"
+                "QToolButton:pressed  { background: %4; }"
+                "QToolButton:disabled { color: #5f6368; }"
+            ).arg(kTextDim, QString::number(size / 2), kHover, kBorder)
         );
-}
+        return btn;
+    };
 
-void MainWindow::addNewIncognitoTab(const QUrl &url){
-    createTab(
-        new QWebEngineProfile(this),
-        url,
-        "🕶 "
-        );
-}
+    m_backBtn    = makeBtn("←", tr("Back (Alt+←)"));
+    m_forwardBtn = makeBtn("→", tr("Forward (Alt+→)"));
+    m_reloadBtn  = makeBtn("⟳", tr("Reload (F5)"));
 
-void MainWindow::onTabCloseRequested(int index)
-{
-    // Always keep at least one tab open
-    if (m_tabWidget->count() <= 1)
-        return;
+    connect(m_backBtn,    &QToolButton::clicked, this,
+            [this]() { if (auto *v = currentWebView()) v->back(); });
+    connect(m_forwardBtn, &QToolButton::clicked, this,
+            [this]() { if (auto *v = currentWebView()) v->forward(); });
+    connect(m_reloadBtn,  &QToolButton::clicked, this,
+            [this]() { if (auto *v = currentWebView()) v->reload(); });
 
-    QWidget *tab = m_tabWidget->widget(index);
-    m_tabWidget->removeTab(index);
-    delete tab;
-}
-
-void MainWindow::onAddressEntered()
-{
-    QWebEngineView *webView = currentWebView();
-    if (webView)
-        webView->setUrl(QUrl::fromUserInput(m_addressBar->text()));
-}
-
-void MainWindow::setupToolBar()
-{
-    m_toolBar = addToolBar(tr("Navigation"));
-    m_toolBar->setMovable(false);
-    m_toolBar->setFloatable(false);
-
-    // Force toolbar to sit below menu bar by setting tool button style
-    m_toolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-
-    m_backAction    = m_toolBar->addAction(style()->standardIcon(QStyle::SP_ArrowBack),    tr("Back"));
-    m_forwardAction = m_toolBar->addAction(style()->standardIcon(QStyle::SP_ArrowForward), tr("Forward"));
-    m_reloadAction  = m_toolBar->addAction(style()->standardIcon(QStyle::SP_BrowserReload),tr("Reload"));
-    m_homeAction    = m_toolBar->addAction(style()->standardIcon(QStyle::SP_DirHomeIcon),  tr("Home"));
-
-    m_addressBar = new QLineEdit(this);
-    m_addressBar->setPlaceholderText(tr("Search or enter address"));
+    // ── Address bar (omnibox) ────────────────────────────────────────────────
+    m_addressBar = new QLineEdit(nav);
+    m_addressBar->setPlaceholderText(tr("Search Google or type a URL"));
     m_addressBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_addressBar->setMinimumWidth(350);
     m_addressBar->setStyleSheet(
-        "QLineEdit {"
-        "  background: #16213e;"
-        "  color: white;"
-        "  border: 1px solid #0f3460;"
-        "  border-radius: 12px;"
-        "  padding: 4px 12px;"
-        "}"
-        "QLineEdit:focus {"
-        "  border-color: #e94560;"
-        "}"
-        );
-    m_toolBar->addWidget(m_addressBar);
+        QString(
+            "QLineEdit {"
+            "  background: %1;"
+            "  color: %2;"
+            "  border: 1px solid %3;"
+            "  border-radius: 16px;"
+            "  padding: 5px 16px;"
+            "  font-family: '%4';"
+            "  font-size: 13px;"
+            "  selection-background-color: %5;"
+            "}"
+            "QLineEdit:focus {"
+            "  border-color: %5;"
+            "  background: %6;"
+            "}"
+        ).arg(kOmnibox, kText, kBorder, kFontFamily, kAccent, kFrame)
+    );
 
-    m_toolBar->setStyleSheet(
-        "QToolBar {"
-        "  background: #1a1a2e;"
-        "  border-bottom: 1px solid #0f3460;"
-        "  padding: 4px;"
-        "  spacing: 4px;"
-        "}"
-        "QToolButton {"
-        "  color: white;"
-        "  background: transparent;"
-        "  border-radius: 6px;"
-        "  padding: 4px;"
-        "}"
-        "QToolButton:hover {"
-        "  background: #16213e;"
-        "}"
-        );
+    // ── Hamburger menu ( ⋮ ) ────────────────────────────────────────────────
+    QToolButton *menuBtn = makeBtn("⋮", tr("Customize and control"), 32);
+    menuBtn->setPopupMode(QToolButton::InstantPopup);
+    menuBtn->setStyleSheet(
+        menuBtn->styleSheet() +
+        "QToolButton::menu-indicator { image: none; }"
+    );
 
-    connect(m_backAction,    &QAction::triggered, this, [this]() { if (auto *v = currentWebView()) v->back(); });
-    connect(m_forwardAction, &QAction::triggered, this, [this]() { if (auto *v = currentWebView()) v->forward(); });
-    connect(m_reloadAction,  &QAction::triggered, this, [this]() { if (auto *v = currentWebView()) v->reload(); });
+    QMenu *hamburger = new QMenu(menuBtn);
+    hamburger->setStyleSheet(
+        QString(
+            "QMenu {"
+            "  background: %1;"
+            "  color: %2;"
+            "  border: 1px solid %3;"
+            "  border-radius: 8px;"
+            "  padding: 4px 0px;"
+            "  font-family: '%4';"
+            "  font-size: 12px;"
+            "}"
+            "QMenu::item {"
+            "  padding: 8px 32px 8px 16px;"
+            "}"
+            "QMenu::item:selected {"
+            "  background: %5;"
+            "  border-radius: 0px;"
+            "}"
+            "QMenu::separator {"
+            "  height: 1px;"
+            "  background: %3;"
+            "  margin: 4px 0px;"
+            "}"
+        ).arg(kSurface, kText, kBorder, kFontFamily, kHover)
+    );
+    buildHamburgerMenu(hamburger);
+    menuBtn->setMenu(hamburger);
+
+    hl->addWidget(m_backBtn);
+    hl->addWidget(m_forwardBtn);
+    hl->addWidget(m_reloadBtn);
+    hl->addSpacing(8);
+    hl->addWidget(m_addressBar);
+    hl->addSpacing(4);
+    hl->addWidget(menuBtn);
 }
 
-void MainWindow::setupMenuBar()
+// ─────────────────────────────────────────────────────────────────────────────
+//  Hamburger menu items
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::buildHamburgerMenu(QMenu *menu)
 {
-    menuBar()->setStyleSheet(
-        "QMenuBar {"
-        "  background: #1a1a2e;"
-        "  color: white;"
-        "  border-bottom: 1px solid #0f3460;"
-        "}"
-        "QMenuBar::item {"
-        "  background: transparent;"
-        "  padding: 6px 14px;"
-        "}"
-        "QMenuBar::item:selected {"
-        "  background: #16213e;"
-        "  border-radius: 4px;"
-        "}"
-        "QMenu {"
-        "  background: #16213e;"
-        "  color: white;"
-        "  border: 1px solid #0f3460;"
-        "}"
-        "QMenu::item:selected {"
-        "  background: #0f3460;"
-        "}"
-        );
+    QAction *newTab = menu->addAction(tr("New tab                Ctrl+T"));
+    connect(newTab, &QAction::triggered, this, [this]() { addNewTab(); });
 
-    QMenu *fileMenu = menuBar()->addMenu(tr("File"));
-    QAction *newTabAction = fileMenu->addAction(tr("New Tab"));
-    newTabAction->setShortcut(QKeySequence("Ctrl+T"));
-    connect(newTabAction, &QAction::triggered, this, [this]() { addNewTab(); });
+    QAction *incognito = menu->addAction(tr("New incognito tab   Ctrl+Shift+N"));
+    connect(incognito, &QAction::triggered, this, [this]() { addNewIncognitoTab(); });
 
-    QAction *incognitoAction = fileMenu->addAction(tr("New Incognito Tab"));
-    incognitoAction->setShortcut(QKeySequence("Ctrl+Shift+N"));
-    connect(incognitoAction, &QAction::triggered, this, [this]() { addNewIncognitoTab(); });
+    QAction *closeTab = menu->addAction(tr("Close tab              Ctrl+W"));
+    connect(closeTab, &QAction::triggered, this, [this]() {
+        onTabCloseRequested(m_tabBar->currentIndex());
+    });
 
-    QAction *closeTabAction = fileMenu->addAction(tr("Close Tab"));
-    closeTabAction->setShortcut(QKeySequence("Ctrl+W"));
-    connect(closeTabAction, &QAction::triggered, this, [this]() { onTabCloseRequested(m_tabWidget->currentIndex()); });
+    menu->addSeparator();
 
-    fileMenu->addSeparator();
-    QAction *quitAction = fileMenu->addAction(tr("Quit"));
-    quitAction->setShortcut(QKeySequence("Ctrl+Q"));
-    connect(quitAction, &QAction::triggered, this, &QWidget::close);
+    QAction *zoomIn  = menu->addAction(tr("Zoom in                 Ctrl++"));
+    QAction *zoomOut = menu->addAction(tr("Zoom out               Ctrl+-"));
+    connect(zoomIn,  &QAction::triggered, this, [this]() {
+        if (auto *v = currentWebView()) v->setZoomFactor(v->zoomFactor() + 0.1);
+    });
+    connect(zoomOut, &QAction::triggered, this, [this]() {
+        if (auto *v = currentWebView()) v->setZoomFactor(v->zoomFactor() - 0.1);
+    });
 
-    QMenu *editMenu = menuBar()->addMenu(tr("Edit"));
-    editMenu->addAction(tr("Cut"));
-    editMenu->addAction(tr("Copy"));
-    editMenu->addAction(tr("Paste"));
+    menu->addSeparator();
 
-    QMenu *viewMenu = menuBar()->addMenu(tr("View"));
-    viewMenu->addAction(tr("Zoom In"));
-    viewMenu->addAction(tr("Zoom Out"));
-    viewMenu->addAction(tr("Reset Zoom"));
-    viewMenu->addAction(tr("Toggle Full Screen"));
+    QAction *downloads = menu->addAction(tr("Downloads"));
+    connect(downloads, &QAction::triggered, this, [this]() {
+        m_downloadManager->show();
+    });
 
-    QMenu *bookmarksMenu = menuBar()->addMenu(tr("Bookmarks"));
-    bookmarksMenu->addAction(tr("Add Bookmark"));
-    bookmarksMenu->addAction(tr("Show All Bookmarks"));
+    menu->addSeparator();
 
-    QMenu *historyMenu = menuBar()->addMenu(tr("History"));
-    historyMenu->addAction(tr("Show History"));
-    historyMenu->addAction(tr("Clear History"));
-
-    QMenu *helpMenu = menuBar()->addMenu(tr("Help"));
-    helpMenu->addAction(tr("About"));
+    QAction *quit = menu->addAction(tr("Quit                       Ctrl+Q"));
+    connect(quit, &QAction::triggered, this, &QWidget::close);
 }
 
-QWebEngineView* MainWindow::currentWebView()
-{
-    return qobject_cast<QWebEngineView*>(
-        m_tabWidget->currentWidget()
-        );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+//  Status bar
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::setupStatusBar()
 {
+    statusBar()->setStyleSheet(
+        QString(
+            "QStatusBar {"
+            "  background: %1;"
+            "  color: %2;"
+            "  border-top: 1px solid %3;"
+            "  font-family: '%4';"
+            "  font-size: 11px;"
+            "}"
+        ).arg(kToolbar, kTextDim, kBorder, kFontFamily)
+    );
     statusBar()->showMessage(tr("Ready"));
 
     m_progressBar = new QProgressBar(this);
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
     m_progressBar->setTextVisible(false);
-    m_progressBar->setFixedSize(150, 14);
+    m_progressBar->setFixedSize(150, 10);
+    m_progressBar->setStyleSheet(
+        QString(
+            "QProgressBar {"
+            "  background: %1; border: none; border-radius: 5px;"
+            "}"
+            "QProgressBar::chunk {"
+            "  background: %2; border-radius: 5px;"
+            "}"
+        ).arg(kBorder, kAccent)
+    );
     statusBar()->addPermanentWidget(m_progressBar);
 
     m_progressLabel = new QLabel(tr("0%"), this);
-    m_progressLabel->setFixedWidth(32);
+    m_progressLabel->setFixedWidth(36);
+    m_progressLabel->setStyleSheet(
+        QString("color: %1; font-size: 11px;").arg(kTextDim)
+    );
     statusBar()->addPermanentWidget(m_progressLabel);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tab management
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::createTab(QWebEngineProfile *profile,
+                           const QUrl        &url,
+                           const QString     &prefix)
+{
+    QWebEngineView    *webView = new QWebEngineView(this);
+    CustomBrowserPage *page    = new CustomBrowserPage(profile, webView);
+
+    // Certificate errors
+    connect(page, &QWebEnginePage::certificateError, this,
+            [this](QWebEngineCertificateError error) {
+                auto reply = QMessageBox::warning(
+                    this, tr("HTTPS Certificate Warning"),
+                    QString(tr("The certificate for\n\n%1\n\nis invalid.\n\nContinue anyway?"))
+                        .arg(error.url().toString()),
+                    QMessageBox::Yes | QMessageBox::No
+                );
+                if (reply == QMessageBox::Yes)
+                    error.acceptCertificate();
+                else
+                    error.rejectCertificate();
+            });
+
+    // Permission prompts
+    connect(page, &QWebEnginePage::permissionRequested, this,
+            [this](QWebEnginePermission permission) {
+                QString name;
+                switch (permission.permissionType()) {
+                case QWebEnginePermission::PermissionType::Geolocation:       name = tr("Location");      break;
+                case QWebEnginePermission::PermissionType::MediaAudioCapture: name = tr("Microphone");    break;
+                case QWebEnginePermission::PermissionType::MediaVideoCapture: name = tr("Camera");        break;
+                case QWebEnginePermission::PermissionType::Notifications:     name = tr("Notifications"); break;
+                default:                                                      name = tr("Permission");    break;
+                }
+                auto reply = QMessageBox::question(
+                    this, tr("Permission Request"),
+                    QString(tr("%1 wants access to your %2.\nAllow?"))
+                        .arg(permission.origin().host(), name)
+                );
+                if (reply == QMessageBox::Yes) permission.grant();
+                else                           permission.deny();
+            });
+
+    // Popup blocking
+    connect(page, &CustomBrowserPage::popupBlocked,
+            this, &MainWindow::onPopupBlocked);
+
+    webView->setPage(page);
+
+    // Add to stack & tab bar (indices stay in sync)
+    int stackIdx = m_webStack->addWidget(webView);
+    int tabIdx   = m_tabBar->addTab(prefix + tr("New Tab"));
+    m_webStack->setCurrentIndex(stackIdx);
+    m_tabBar->setCurrentIndex(tabIdx);
+
+    // Title
+    connect(webView, &QWebEngineView::titleChanged,
+            this, [this, webView, prefix](const QString &title) {
+                int i = m_webStack->indexOf(webView);
+                if (i >= 0)
+                    m_tabBar->setTabText(i, prefix + (title.isEmpty() ? tr("New Tab") : title));
+                if (m_webStack->currentWidget() == webView)
+                    setWindowTitle(title.isEmpty() ? tr("Qt Browser") : title);
+            });
+
+    // Favicon
+    connect(webView, &QWebEngineView::iconChanged,
+            this, [this, webView](const QIcon &icon) {
+                int i = m_webStack->indexOf(webView);
+                if (i >= 0)
+                    m_tabBar->setTabIcon(i, icon);
+            });
+
+    // URL sync
+    connect(webView, &QWebEngineView::urlChanged,
+            this, [this, webView](const QUrl &newUrl) {
+                if (m_webStack->currentWidget() == webView)
+                    m_addressBar->setText(newUrl.toString());
+            });
+
+    // Progress
+    connect(webView, &QWebEngineView::loadProgress,
+            this, [this, webView](int progress) {
+                if (m_webStack->currentWidget() == webView) {
+                    m_progressBar->setValue(progress);
+                    m_progressLabel->setText(QString::number(progress) + "%");
+                }
+            });
+
+    // Status
+    connect(webView, &QWebEngineView::loadStarted,
+            this, [this, webView]() {
+                if (m_webStack->currentWidget() == webView)
+                    statusBar()->showMessage(tr("Loading…"));
+            });
+    connect(webView, &QWebEngineView::loadFinished,
+            this, [this, webView](bool) {
+                if (m_webStack->currentWidget() == webView)
+                    statusBar()->showMessage(tr("Ready"));
+            });
+
+    webView->setUrl(url);
+}
+
+void MainWindow::addNewTab(const QUrl &url)
+{
+    createTab(QWebEngineProfile::defaultProfile(), url);
+}
+
+void MainWindow::addNewIncognitoTab(const QUrl &url)
+{
+    createTab(new QWebEngineProfile(this), url, QString::fromUtf8("🕶 "));
+}
+
+void MainWindow::onTabCloseRequested(int index)
+{
+    if (m_tabBar->count() <= 1) return;
+
+    QWidget *w = m_webStack->widget(index);
+    m_webStack->removeWidget(w);
+    m_tabBar->removeTab(index);
+    delete w;
+}
+
+void MainWindow::onCurrentTabChanged(int index)
+{
+    if (index < 0 || index >= m_webStack->count()) return;
+    m_webStack->setCurrentIndex(index);
+
+    QWebEngineView *view = currentWebView();
+    if (!view) return;
+
+    m_addressBar->setText(view->url().toString());
+    setWindowTitle(view->title().isEmpty() ? tr("Qt Browser") : view->title());
+    statusBar()->showMessage(tr("Ready"));
+}
+
+void MainWindow::onAddressEntered()
+{
+    if (auto *v = currentWebView())
+        v->setUrl(QUrl::fromUserInput(m_addressBar->text()));
+}
+
+QWebEngineView* MainWindow::currentWebView()
+{
+    return qobject_cast<QWebEngineView*>(m_webStack->currentWidget());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Popup-blocked notification bar
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::onPopupBlocked(const QUrl &url)
 {
     if (m_notificationBar) {
@@ -489,44 +590,51 @@ void MainWindow::onPopupBlocked(const QUrl &url)
 
     m_notificationBar = new QWidget(this);
     m_notificationBar->setStyleSheet(
-        "background-color: #2b2b2b;"
-        "border-bottom: 1px solid #555;"
-        "color: white;"
-        );
+        QString(
+            "background: %1;"
+            "border-bottom: 1px solid %2;"
+            "color: %3;"
+            "font-family: '%4';"
+        ).arg(kSurface, kBorder, kText, kFontFamily)
+    );
     m_notificationBar->setFixedHeight(36);
 
     QHBoxLayout *layout = new QHBoxLayout(m_notificationBar);
-    layout->setContentsMargins(8, 4, 8, 4);
+    layout->setContentsMargins(12, 4, 12, 4);
 
-    QLabel *label = new QLabel(tr("Popup blocked"), m_notificationBar);
-    QPushButton *openBtn = new QPushButton(tr("Open anyway"), m_notificationBar);
-    QPushButton *dismissBtn = new QPushButton(tr("Dismiss"), m_notificationBar);
+    QLabel      *label      = new QLabel(tr("Pop-up blocked"), m_notificationBar);
+    QPushButton *openBtn    = new QPushButton(tr("Open anyway"), m_notificationBar);
+    QPushButton *dismissBtn = new QPushButton(tr("Dismiss"),     m_notificationBar);
+
+    openBtn->setStyleSheet(
+        QString(
+            "background: %1; color: #202124; border: none; border-radius: 4px;"
+            "padding: 4px 12px; font-size: 12px; font-weight: 600;"
+        ).arg(kAccent)
+    );
+    dismissBtn->setStyleSheet(
+        QString(
+            "background: %1; color: %2; border: none; border-radius: 4px;"
+            "padding: 4px 12px; font-size: 12px;"
+        ).arg(kHover, kText)
+    );
 
     layout->addWidget(label);
     layout->addStretch();
     layout->addWidget(openBtn);
     layout->addWidget(dismissBtn);
-    openBtn->setStyleSheet("background-color: #0078d4; color: white; border-radius: 4px; padding: 4px 10px;");
-    dismissBtn->setStyleSheet("background-color: #555; color: white; border-radius: 4px; padding: 4px 10px;");
+
     connect(openBtn, &QPushButton::clicked, this, [this, url]() {
         addNewTab(url);
-        if (m_notificationBar) {
-            m_notificationBar->deleteLater();
-            m_notificationBar = nullptr;
-        }
+        if (m_notificationBar) { m_notificationBar->deleteLater(); m_notificationBar = nullptr; }
     });
-
     connect(dismissBtn, &QPushButton::clicked, this, [this]() {
-        if (m_notificationBar) {
-            m_notificationBar->deleteLater();
-            m_notificationBar = nullptr;
-        }
+        if (m_notificationBar) { m_notificationBar->deleteLater(); m_notificationBar = nullptr; }
     });
 
-    // Position bar just below the toolbar
-    int toolbarBottom = m_toolBar->y() + m_toolBar->height();
+    int navBottom = m_navWidget->y() + m_navWidget->height();
     m_notificationBar->setParent(this);
-    m_notificationBar->setGeometry(0, toolbarBottom, this->width(), 36);
+    m_notificationBar->setGeometry(0, navBottom, width(), 36);
     m_notificationBar->show();
     m_notificationBar->raise();
 }

@@ -1,15 +1,18 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QToolBar>
+#include <QTabBar>
+#include <QStackedWidget>
 #include <QLineEdit>
 #include <QProgressBar>
 #include <QStatusBar>
 #include <QLabel>
-#include <QTabWidget>
 #include <QWebEngineView>
 #include <QPushButton>
+#include <QToolButton>
 #include <QWebEngineProfile>
+#include <QAction>
+#include <QMenu>
 #include "downloadmanager.h"
 
 class MainWindow : public QMainWindow
@@ -27,6 +30,7 @@ public slots:
 private slots:
     void onAddressEntered();
     void onTabCloseRequested(int index);
+    void onCurrentTabChanged(int index);
     void onPopupBlocked(const QUrl &url);
 
 private:
@@ -34,19 +38,29 @@ private:
                    const QUrl &url,
                    const QString &prefix = "");
     QWebEngineView* currentWebView();
-    void setupToolBar();
-    void setupMenuBar();
+    void setupTabStrip(QWidget *parent);
+    void setupNavBar(QWidget *parent);
     void setupStatusBar();
+    void buildHamburgerMenu(QMenu *menu);
 
-    QTabWidget      *m_tabWidget        = nullptr;
-    QToolBar        *m_toolBar          = nullptr;
+    // Tab strip
+    QTabBar         *m_tabBar           = nullptr;
+    QStackedWidget  *m_webStack         = nullptr;
+
+    // Nav bar
+    QWidget         *m_navWidget        = nullptr;
     QLineEdit       *m_addressBar       = nullptr;
-    QAction         *m_backAction       = nullptr;
-    QAction         *m_forwardAction    = nullptr;
-    QAction         *m_reloadAction     = nullptr;
-    QAction         *m_homeAction       = nullptr;
+    QToolButton     *m_backBtn          = nullptr;
+    QToolButton     *m_forwardBtn       = nullptr;
+    QToolButton     *m_reloadBtn        = nullptr;
+    QToolButton     *m_homeBtn          = nullptr;
+
+    // Status / progress
     QProgressBar    *m_progressBar      = nullptr;
     QLabel          *m_progressLabel    = nullptr;
+
+    // Popup notification
     QWidget         *m_notificationBar  = nullptr;
+
     DownloadManager *m_downloadManager  = nullptr;
 };
